@@ -5,6 +5,7 @@ use crate::{
 };
 use reqwest::{header, IntoUrl, Method, Response, StatusCode, Version};
 use serde::{de::DeserializeOwned, Deserialize};
+use crate::user::VoteStatus;
 
 cfg_if::cfg_if! {
   if #[cfg(feature = "autoposter")] {
@@ -277,6 +278,34 @@ impl Client {
       )
       .await
       .map(|res| res.voted != 0)
+  }
+
+  /// Gets the vote status of the specified user has voted your Discord bot.
+  ///
+  /// # Panics
+  ///
+  /// Panics if any of the following conditions are met:
+  /// - The user ID argument is a string and it's not a valid ID (expected things like `"123456789"`)
+  /// - The client uses an invalid [Top.gg API](https://docs.top.gg) token (unauthorized)
+  ///
+  /// # Errors
+  ///
+  /// Errors if any of the following conditions are met:
+  /// - An internal error from the client itself preventing it from sending a HTTP request to [Top.gg](https://top.gg) ([`InternalClientError`][crate::Error::InternalClientError])
+  /// - An unexpected response from the [Top.gg](https://top.gg) servers ([`InternalServerError`][crate::Error::InternalServerError])
+  /// - The client is being ratelimited from sending more HTTP requests ([`Ratelimit`][crate::Error::Ratelimit])
+  pub async fn vote_status<I>(&self, user_id: I) -> Result<VoteStatus>
+  where
+      I: Snowflake,
+  {
+    self
+        .inner
+        .send::<VoteStatus>(
+          Method::GET,
+          api!("v1/projects/@me/votes/{}?source=discord", user_id.as_snowflake()),
+          None,
+        )
+        .await
   }
 
   /// Checks if the weekend multiplier is active.

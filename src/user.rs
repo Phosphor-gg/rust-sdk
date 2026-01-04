@@ -102,6 +102,13 @@ pub(crate) struct Voted {
   pub(crate) voted: u8,
 }
 
+#[derive(Deserialize)]
+pub struct VoteStatus {
+  pub created_at: Option<DateTime<Utc>>,
+  pub expires_at: Option<DateTime<Utc>>,
+  pub weight: Option<i32>
+}
+
 util::debug_struct! {
   /// A struct representing a user who has voted on a Discord bot listed on [Top.gg](https://top.gg). (See [`Client::get_voters`][crate::Client::get_voters])
   #[must_use]
