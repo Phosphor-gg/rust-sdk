@@ -5,6 +5,4 @@ updates:
     commit-message:
       prefix: "deps: "
     schedule:
-      day: "saturday"
-      interval: "weekly"
-      time: "07:15"
+      interval: "daily"
