@@ -74,7 +74,9 @@ macro_rules! serenity_handler {
           if last.map_or(true, |l| now.duration_since(l) >= self.min_interval) {
             *last = Some(now);
             let stats = self.stats.stats.read().await;
-            self.client.post_stats(&*stats).await?;
+            if let Err(e) = self.client.post_stats(&*stats).await {
+              eprintln!("Failed to post bot stats: {}", e);
+            }
           }
           Ok(())
         }
