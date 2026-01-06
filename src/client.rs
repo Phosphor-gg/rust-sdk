@@ -1,3 +1,4 @@
+use crate::user::VoteStatus;
 use crate::{
   bot::{Bot, IsWeekend},
   user::{User, Voted, Voter},
@@ -5,7 +6,6 @@ use crate::{
 };
 use reqwest::{header, IntoUrl, Method, Response, StatusCode, Version};
 use serde::{de::DeserializeOwned, Deserialize};
-use crate::user::VoteStatus;
 
 cfg_if::cfg_if! {
   if #[cfg(feature = "autoposter")] {
@@ -296,16 +296,19 @@ impl Client {
   /// - The client is being ratelimited from sending more HTTP requests ([`Ratelimit`][crate::Error::Ratelimit])
   pub async fn vote_status<I>(&self, user_id: I) -> Result<VoteStatus>
   where
-      I: Snowflake,
+    I: Snowflake,
   {
     self
-        .inner
-        .send::<VoteStatus>(
-          Method::GET,
-          api!("v1/projects/@me/votes/{}?source=discord", user_id.as_snowflake()),
-          None,
-        )
-        .await
+      .inner
+      .send::<VoteStatus>(
+        Method::GET,
+        api!(
+          "v1/projects/@me/votes/{}?source=discord",
+          user_id.as_snowflake()
+        ),
+        None,
+      )
+      .await
   }
 
   /// Checks if the weekend multiplier is active.

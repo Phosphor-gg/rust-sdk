@@ -1,14 +1,10 @@
-use crate::{Result, Stats};
+use crate::Stats;
 use core::{
   ops::{Deref, DerefMut},
   time::Duration,
 };
 use std::sync::Arc;
-use tokio::{
-  sync::{mpsc, RwLock, RwLockWriteGuard, Semaphore},
-  task::{spawn, JoinHandle},
-  time::sleep,
-};
+use tokio::sync::{RwLock, RwLockWriteGuard};
 
 mod client;
 
@@ -35,13 +31,11 @@ cfg_if::cfg_if! {
 
 /// A struct representing a thread-safe form of the [`Stats`] struct to be used in autoposter [`Handler`]s.
 pub struct SharedStats {
-  sem: Semaphore,
   stats: RwLock<Stats>,
 }
 
 /// A guard wrapping over tokio's [`RwLockWriteGuard`] that lets you freely feed new [`Stats`] data before being sent to the [`Autoposter`].
 pub struct SharedStatsGuard<'a> {
-  sem: &'a Semaphore,
   guard: RwLockWriteGuard<'a, Stats>,
 }
 
@@ -82,21 +76,11 @@ impl DerefMut for SharedStatsGuard<'_> {
   }
 }
 
-impl Drop for SharedStatsGuard<'_> {
-  #[inline(always)]
-  fn drop(&mut self) {
-    if self.sem.available_permits() < 1 {
-      self.sem.add_permits(1);
-    }
-  }
-}
-
 impl SharedStats {
   /// Creates a new [`SharedStats`] struct. Before any modifications, the [`Stats`] struct inside defaults to zero server count.
   #[inline(always)]
   pub fn new() -> Self {
     Self {
-      sem: Semaphore::const_new(0),
       stats: RwLock::new(Stats::from(0)),
     }
   }
@@ -105,14 +89,8 @@ impl SharedStats {
   #[inline(always)]
   pub async fn write<'a>(&'a self) -> SharedStatsGuard<'a> {
     SharedStatsGuard {
-      sem: &self.sem,
       guard: self.stats.write().await,
     }
-  }
-
-  #[inline(always)]
-  async fn wait(&self) {
-    self.sem.acquire().await.unwrap().forget();
   }
 }
 
@@ -124,78 +102,40 @@ pub trait Handler: Send + Sync + 'static {
   fn stats(&self) -> &SharedStats;
 }
 
-/// A struct that lets you automate the process of posting bot statistics to [Top.gg](https://top.gg) in intervals.
+/// A struct that lets you automate the process of posting bot statistics to [Top.gg](https://top.gg) on guild events with a minimum interval.
 ///
-/// **NOTE:** This struct owns the thread handle that executes the automatic posting. The autoposter thread will stop once this struct is dropped.
+/// **NOTE:** This struct provides a handler that posts statistics when the bot joins or leaves guilds, ensuring at least the minimum interval between posts.
 #[must_use]
 pub struct Autoposter<H> {
   handler: Arc<H>,
-  thread: JoinHandle<()>,
-  receiver: Option<mpsc::UnboundedReceiver<Result<()>>>,
 }
 
 impl<H> Autoposter<H>
 where
   H: Handler,
 {
-  /// Creates an [`Autoposter`] struct as well as immediately starting the thread. The thread will never stop until this struct gets dropped.
+  /// Creates an [`Autoposter`] struct.
   ///
-  /// - `client` can either be a reference to an existing [`Client`][crate::Client] or a [`&str`][std::str] representing a [Top.gg API](https://docs.top.gg) token.
-  /// - `handler` is a struct that handles the *retrieving stats* part before being sent to the [`Autoposter`]. This datatype is essentially the bridge between an external third-party Discord Bot library between this library.
+  /// - `handler` is a struct that handles the *retrieving stats* part and posting to the [`Autoposter`]. This datatype is essentially the bridge between an external third-party Discord Bot library between this library.
   ///
   /// # Panics
   ///
   /// Panics if the interval argument is shorter than 15 minutes (900 seconds).
-  pub fn new<C>(client: &C, handler: H, interval: Duration) -> Self
-  where
-    C: AsClient,
-  {
+  pub fn new(handler: H, interval: Duration) -> Self {
     assert!(
       interval.as_secs() >= 900,
       "The interval mustn't be shorter than 15 minutes."
     );
 
-    let client = client.as_client();
     let handler = Arc::new(handler);
-    let (sender, receiver) = mpsc::unbounded_channel();
 
-    Self {
-      handler: Arc::clone(&handler),
-      thread: spawn(async move {
-        loop {
-          handler.stats().wait().await;
-
-          {
-            let stats = handler.stats().stats.read().await;
-
-            if sender.send(client.post_stats(&stats).await).is_err() {
-              break;
-            }
-          };
-
-          sleep(interval).await;
-        }
-      }),
-      receiver: Some(receiver),
-    }
+    Self { handler }
   }
 
   /// Retrieves the [`Handler`] inside in the form of a [cloned][Arc::clone] [`Arc<H>`][Arc].
   #[inline(always)]
   pub fn handler(&self) -> Arc<H> {
     Arc::clone(&self.handler)
-  }
-  
-  /// Returns a future that resolves every time the [`Autoposter`] has attempted to post the bot's stats. If you want to use the receiver directly, call [`receiver`].
-  #[inline(always)]
-  pub async fn recv(&mut self) -> Option<Result<()>> {
-    self.receiver.as_mut().expect("receiver is already taken from the receiver() method. please call recv() directly from the receiver.").recv().await
-  }
-  
-  /// Takes the receiver responsible for [`recv`]. Subsequent calls to this function and [`recv`] after this call will panic.
-  #[inline(always)]
-  pub fn receiver(&mut self) -> mpsc::UnboundedReceiver<Result<()>> {
-    self.receiver.take().expect("receiver() can only be called once.")
   }
 }
 
@@ -211,7 +151,7 @@ impl<H> Deref for Autoposter<H> {
 #[cfg(feature = "serenity")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serenity")))]
 impl Autoposter<Serenity> {
-  /// Creates an [`Autoposter`] struct from an existing built-in [serenity] [`Handler`] as well as immediately starting the thread. The thread will never stop until this struct gets dropped.
+  /// Creates an [`Autoposter`] struct from an existing built-in [serenity] [`Handler`].
   ///
   /// - `client` can either be a reference to an existing [`Client`][crate::Client] or a [`&str`][std::str] representing a [Top.gg API](https://docs.top.gg) token.
   ///
@@ -223,14 +163,15 @@ impl Autoposter<Serenity> {
   where
     C: AsClient,
   {
-    Self::new(client, Serenity::new(), interval)
+    let c = client.as_client();
+    Self::new(Serenity::new(Arc::clone(&c), interval), interval)
   }
 }
 
 #[cfg(feature = "twilight")]
 #[cfg_attr(docsrs, doc(cfg(feature = "twilight")))]
 impl Autoposter<Twilight> {
-  /// Creates an [`Autoposter`] struct from an existing built-in [twilight](https://twilight.rs) [`Handler`] as well as immediately starting the thread. The thread will never stop until this struct gets dropped.
+  /// Creates an [`Autoposter`] struct from an existing built-in [twilight](https://twilight.rs) [`Handler`].
   ///
   /// - `client` can either be a reference to an existing [`Client`][crate::Client] or a [`&str`][std::str] representing a [Top.gg API](https://docs.top.gg) token.
   ///
@@ -242,13 +183,7 @@ impl Autoposter<Twilight> {
   where
     C: AsClient,
   {
-    Self::new(client, Twilight::new(), interval)
-  }
-}
-
-impl<H> Drop for Autoposter<H> {
-  #[inline(always)]
-  fn drop(&mut self) {
-    self.thread.abort();
+    let c = client.as_client();
+    Self::new(Twilight::new(Arc::clone(&c), interval), interval)
   }
 }
