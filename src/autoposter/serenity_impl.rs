@@ -1,4 +1,7 @@
-use crate::autoposter::{Handler, SharedStats};
+use crate::{
+  autoposter::{Handler, SharedStats},
+  InnerClient,
+};
 use paste::paste;
 use serenity::{
   client::{Context, EventHandler, FullEvent},
@@ -7,6 +10,10 @@ use serenity::{
     guild::{Guild, UnavailableGuild},
     id::GuildId,
   },
+};
+use std::{
+  sync::Arc,
+  time::{Duration, Instant},
 };
 
 cfg_if::cfg_if! {
@@ -28,6 +35,9 @@ pub struct Serenity {
   #[cfg(not(feature = "serenity-cached"))]
   cache: Mutex<Cache>,
   stats: SharedStats,
+  client: Arc<InnerClient>,
+  min_interval: Duration,
+  last_post: Mutex<Option<Instant>>,
 }
 
 macro_rules! serenity_handler {
@@ -44,14 +54,29 @@ macro_rules! serenity_handler {
       #[allow(unused_variables)]
       impl Serenity {
         #[inline(always)]
-        pub(super) fn new() -> Self {
+        pub(super) fn new(client: Arc<InnerClient>, min_interval: Duration) -> Self {
           Self {
             #[cfg(not(feature = "serenity-cached"))]
             cache: Mutex::const_new(Cache {
               guilds: HashSet::new(),
             }),
             stats: SharedStats::new(),
+            client,
+            min_interval,
+            last_post: Mutex::const_new(None),
           }
+        }
+
+        /// Attempts to post stats if the minimum interval has passed since the last post.
+        async fn try_post(&self) -> Result<(), crate::Error> {
+          let now = Instant::now();
+          let mut last = self.last_post.lock().await;
+          if last.map_or(true, |l| now.duration_since(l) >= self.min_interval) {
+            *last = Some(now);
+            let stats = self.stats.stats.read().await;
+            self.client.post_stats(&*stats).await?;
+          }
+          Ok(())
         }
 
         /// Handles an entire [serenity] [`FullEvent`] enum. This can be used in [serenity] frameworks.
@@ -106,9 +131,11 @@ serenity_handler! {
           if #[cfg(not(feature = "serenity-cached"))] {
             let mut cache = self.cache.lock().await;
 
-            cache.guilds = guilds.into_iter().map(|x| x.id).collect();
+            cache.guilds = guilds.iter().map(|x| x.id).collect();
           }
         }
+
+        let _ = self.try_post().await;
       }
     }
 
@@ -122,6 +149,8 @@ serenity_handler! {
         let mut stats = self.stats.write().await;
 
         stats.set_server_count(guild_count);
+
+        let _ = self.try_post().await;
       }
     }
 
@@ -169,6 +198,8 @@ serenity_handler! {
             }
           }
         }
+
+        let _ = self.try_post().await;
       }
     }
 
@@ -198,6 +229,8 @@ serenity_handler! {
             }
           }
         }
+
+        let _ = self.try_post().await;
       }
     }
   }

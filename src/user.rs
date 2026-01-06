@@ -106,7 +106,7 @@ pub(crate) struct Voted {
 pub struct VoteStatus {
   pub created_at: Option<DateTime<Utc>>,
   pub expires_at: Option<DateTime<Utc>>,
-  pub weight: Option<i32>
+  pub weight: Option<i32>,
 }
 
 util::debug_struct! {
