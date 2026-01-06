@@ -334,7 +334,7 @@ impl Client {
       .send::<VoteStatus>(
         Method::GET,
         api!(
-          "v1/projects/@me/votes/{}?source=discord",
+          "/v1/projects/@me/votes/{}?source=discord",
           user_id.as_snowflake()
         ),
         None,
