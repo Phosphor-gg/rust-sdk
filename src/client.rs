@@ -7,6 +7,12 @@ use crate::{
 use reqwest::{header, IntoUrl, Method, Response, StatusCode, Version};
 use serde::{de::DeserializeOwned, Deserialize};
 
+#[derive(Debug, Clone, Copy)]
+pub enum ApiVersion {
+  V0,
+  V1,
+}
+
 cfg_if::cfg_if! {
   if #[cfg(feature = "autoposter")] {
     use crate::autoposter;
@@ -42,23 +48,32 @@ pub struct InnerClient {
 
 // this is implemented here because autoposter needs to access this struct from a different thread.
 impl InnerClient {
-  pub(crate) fn new(mut token: String) -> Self {
-    token.insert_str(0, "Bearer ");
-
+  pub(crate) fn new(token: String) -> Self {
     Self {
       http: reqwest::Client::new(),
       token,
     }
   }
 
-  async fn send_inner(&self, method: Method, url: impl IntoUrl, body: Vec<u8>) -> Result<Response> {
+  async fn send_inner(
+    &self,
+    method: Method,
+    url: impl IntoUrl,
+    body: Vec<u8>,
+    api_version: ApiVersion,
+  ) -> Result<Response> {
+    let auth_header = match api_version {
+      ApiVersion::V0 => self.token.clone(),
+      ApiVersion::V1 => format!("Bearer {}", self.token),
+    };
+
     match self
       .http
       .execute(
         self
           .http
           .request(method, url)
-          .header(header::AUTHORIZATION, &self.token)
+          .header(header::AUTHORIZATION, auth_header)
           .header(header::CONNECTION, "close")
           .header(header::CONTENT_LENGTH, body.len())
           .header(header::CONTENT_TYPE, "application/json")
@@ -103,11 +118,15 @@ impl InnerClient {
     method: Method,
     url: impl IntoUrl,
     body: Option<Vec<u8>>,
+    api_version: ApiVersion,
   ) -> Result<T>
   where
     T: DeserializeOwned,
   {
-    match self.send_inner(method, url, body.unwrap_or_default()).await {
+    match self
+      .send_inner(method, url, body.unwrap_or_default(), api_version)
+      .await
+    {
       Ok(response) => util::parse_json(response).await,
       Err(err) => Err(err),
     }
@@ -119,6 +138,7 @@ impl InnerClient {
         Method::POST,
         api!("/bots/stats"),
         serde_json::to_vec(new_stats).unwrap(),
+        ApiVersion::V0,
       )
       .await
       .map(|_| ())
@@ -167,7 +187,12 @@ impl Client {
   {
     self
       .inner
-      .send(Method::GET, api!("/users/{}", id.as_snowflake()), None)
+      .send(
+        Method::GET,
+        api!("/users/{}", id.as_snowflake()),
+        None,
+        ApiVersion::V0,
+      )
       .await
   }
 
@@ -192,7 +217,12 @@ impl Client {
   {
     self
       .inner
-      .send(Method::GET, api!("/bots/{}", id.as_snowflake()), None)
+      .send(
+        Method::GET,
+        api!("/bots/{}", id.as_snowflake()),
+        None,
+        ApiVersion::V0,
+      )
       .await
   }
 
@@ -211,7 +241,7 @@ impl Client {
   pub async fn get_stats(&self) -> Result<Stats> {
     self
       .inner
-      .send(Method::GET, api!("/bots/stats"), None)
+      .send(Method::GET, api!("/bots/stats"), None, ApiVersion::V0)
       .await
   }
 
@@ -247,7 +277,7 @@ impl Client {
   pub async fn get_voters(&self) -> Result<Vec<Voter>> {
     self
       .inner
-      .send(Method::GET, api!("/bots/votes"), None)
+      .send(Method::GET, api!("/bots/votes"), None, ApiVersion::V0)
       .await
   }
 
@@ -275,6 +305,7 @@ impl Client {
         Method::GET,
         api!("/bots/check?userId={}", user_id.as_snowflake()),
         None,
+        ApiVersion::V0,
       )
       .await
       .map(|res| res.voted != 0)
@@ -307,6 +338,7 @@ impl Client {
           user_id.as_snowflake()
         ),
         None,
+        ApiVersion::V1,
       )
       .await
   }
@@ -326,7 +358,7 @@ impl Client {
   pub async fn is_weekend(&self) -> Result<bool> {
     self
       .inner
-      .send::<IsWeekend>(Method::GET, api!("/weekend"), None)
+      .send::<IsWeekend>(Method::GET, api!("/weekend"), None, ApiVersion::V0)
       .await
       .map(|res| res.is_weekend)
   }
