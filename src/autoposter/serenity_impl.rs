@@ -15,11 +15,11 @@ use std::{
   sync::Arc,
   time::{Duration, Instant},
 };
+use tokio::sync::Mutex;
 
 cfg_if::cfg_if! {
   if #[cfg(not(feature = "serenity-cached"))] {
     use std::collections::HashSet;
-    use tokio::sync::Mutex;
 
     struct Cache {
       guilds: HashSet<GuildId>,
